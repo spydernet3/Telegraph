@@ -1,0 +1,19 @@
+name = "telegraph-publisher"
+main = "worker.js"
+compatibility_date = "2025-01-01"
+
+[vars]
+GH_OWNER = "YOUR_GITHUB_USERNAME"
+GH_REPO = "YOUR_REPO_NAME"
+GH_BRANCH = ""                                   # blank = repo default branch
+ALLOWED_ORIGIN = "https://YOUR_GITHUB_USERNAME.github.io"   # origin only: no path, no trailing slash
+
+# Optional loose per-location rate limit (needs Wrangler 4.36.0 or later).
+[[ratelimits]]
+name = "LIMITER"
+namespace_id = "1001"
+  [ratelimits.simple]
+  limit = 10
+  period = 60
+
+# Secret (not stored in this file):  npx wrangler secret put GH_TOKEN
