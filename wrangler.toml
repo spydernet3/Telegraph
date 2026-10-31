@@ -3,10 +3,10 @@ main = "worker.js"
 compatibility_date = "2025-01-01"
 
 [vars]
-GH_OWNER = "YOUR_GITHUB_USERNAME"
-GH_REPO = "YOUR_REPO_NAME"
+GH_OWNER = "spydernet3"
+GH_REPO = "Telegraph"
 GH_BRANCH = ""                                   # blank = repo default branch
-ALLOWED_ORIGIN = "https://YOUR_GITHUB_USERNAME.github.io"   # origin only: no path, no trailing slash
+ALLOWED_ORIGIN = "https://spydernet3.github.io"   # origin only: no path, no trailing slash
 
 # Optional loose per-location rate limit (needs Wrangler 4.36.0 or later).
 [[ratelimits]]
