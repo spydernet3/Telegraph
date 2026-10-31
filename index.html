@@ -122,9 +122,18 @@
   .owner-bar button{ font-family:Arial,sans-serif; font-weight:700; font-size:13px; padding:9px 16px; border:none; border-radius:22px; cursor:pointer; }
   .owner-bar .ob-edit{ background:#fff; color:#2c2c2c; }
 
+
+  /* GitHub settings */
+  .gh-link{ display:block; margin-top:14px; background:none; border:none; color:#888; font-family:Arial,sans-serif; font-size:13px; cursor:pointer; text-decoration:underline; padding:0; }
+  .gh-field{ display:block; font-family:Arial,sans-serif; font-size:12px; color:#555; margin:10px 0 4px; font-weight:700; }
+  .gh-input{ width:100%; font-size:14px; padding:10px 12px; border:1px solid #cfcfcf; border-radius:8px; font-family:Consolas,monospace; color:#2c2c2c; background:#fff; }
+  .gh-status{ font-family:Arial,sans-serif; font-size:13px; margin-top:10px; min-height:18px; line-height:1.4; }
+  .gh-status.err{ color:#e02424; } .gh-status.ok{ color:#16a34a; }
+  #ghSave{ background:#2c2c2c; color:#fff; } #ghCancel{ background:#eee; color:#2c2c2c; } #ghClear{ background:#fff; color:#e02424; border:1px solid #e02424 !important; }
+  .print-btn[disabled]{ opacity:.6; cursor:wait; }
   .hidden-input{ display:none; }
   @media print{
-    .insert-icons,.print-btn,.format-bar,.pop,.remove-float,.owner-bar{ display:none !important; }
+    .insert-icons,.print-btn,.gh-link,.format-bar,.pop,.remove-float,.owner-bar{ display:none !important; }
     .locked .lock-bar,.locked .fade{ display:none !important; }
     .locked .hidden-content{ display:block !important; padding:0 16px 12px !important; }
     .locked{ border:none; }
@@ -154,6 +163,7 @@
     </div>
 
     <button class="print-btn" id="publishBtn">PUBLISH</button>
+    <button class="gh-link" id="ghOpen" type="button">⚙ GitHub settings</button>
   </div>
 
   <!-- floating remove (✕) button for tables & locked blocks -->
@@ -206,14 +216,37 @@
   <div class="share-modal" id="shareModal">
     <div class="share-box">
       <div class="share-h">🎉 Your article is published!</div>
-      <p class="share-p">Copy this link and share it anywhere. Anyone who opens it sees your article. No server needed; the whole article is packed inside the link.</p>
+      <p class="share-p">This is your permanent short link. Share it anywhere. If you edit and re-publish later, the link stays the same.</p>
       <input class="share-link" id="shareLink" readonly>
       <div class="share-actions">
         <button id="copyLink" type="button">Copy link</button>
         <button id="openLink" type="button">Open</button>
         <button id="closeShare" type="button">Close</button>
       </div>
-      <p class="share-note">💡 Host this file as <b>index.html</b> on GitHub Pages, then every published link is public. Uploaded images are embedded in the link, so keep photos small for easy sharing.</p>
+      <p class="share-note" id="shareNote">The article is saved as one file in your GitHub repo. It opens right away; the GitHub Pages copy can take a short while to refresh after an edit.</p>
+    </div>
+  </div>
+
+
+  <!-- GitHub settings modal -->
+  <div class="share-modal" id="ghModal">
+    <div class="share-box">
+      <div class="share-h">GitHub publishing</div>
+      <p class="share-p">Articles are saved in <b>articles/&lt;id&gt;.json</b> in your repo. Create a <b>fine-grained token</b> limited to that one repo with <b>Contents: Read and write</b>. It is stored only in this browser.</p>
+      <label class="gh-field" for="ghToken">Token</label>
+      <input class="gh-input" id="ghToken" type="password" autocomplete="off" placeholder="github_pat_…">
+      <label class="gh-field" for="ghOwner">Owner (blank = auto-detect)</label>
+      <input class="gh-input" id="ghOwner" type="text" autocomplete="off" spellcheck="false">
+      <label class="gh-field" for="ghRepo">Repository (blank = auto-detect)</label>
+      <input class="gh-input" id="ghRepo" type="text" autocomplete="off" spellcheck="false">
+      <label class="gh-field" for="ghBranch">Branch (blank = repo default)</label>
+      <input class="gh-input" id="ghBranch" type="text" autocomplete="off" spellcheck="false">
+      <div class="gh-status" id="ghStatus"></div>
+      <div class="share-actions" style="margin-top:12px">
+        <button id="ghSave" type="button">Save</button>
+        <button id="ghCancel" type="button">Close</button>
+        <button id="ghClear" type="button">Remove token</button>
+      </div>
     </div>
   </div>
 
@@ -226,7 +259,94 @@
   const forePop=document.getElementById('forePop'),backPop=document.getElementById('backPop'),divPop=document.getElementById('divPop');
   const editable=[author,story];
 
-  /* ============ SERVERLESS PUBLISH / READ / EDIT ============ */
+  /* ============ GITHUB-BACKED SHORT LINKS ============ */
+  const CFG_KEY='tg_gh_cfg';
+  const ID_RE=/^[a-z2-9]{6,12}$/;
+  const ALPHA='abcdefghijkmnpqrstuvwxyz23456789';   /* 32 chars, no 0/1/l/o */
+  let editingId=null;
+
+  function loadCfg(){ try{ return JSON.parse(localStorage.getItem(CFG_KEY)||'{}')||{}; }catch(e){ return {}; } }
+  function saveCfg(c){ try{ localStorage.setItem(CFG_KEY,JSON.stringify(c)); return true; }catch(e){ return false; } }
+  function autoRepo(){
+    const h=location.hostname;
+    if(!/\.github\.io$/i.test(h)) return {owner:'',repo:''};
+    const owner=h.split('.')[0];
+    const seg=location.pathname.split('/').filter(Boolean)[0];
+    const repo=(seg && !/\.html?$/i.test(seg)) ? seg : h;   /* project page: /repo/ ; user page: <user>.github.io */
+    return {owner:owner,repo:repo};
+  }
+  function repoInfo(){
+    const c=loadCfg(), a=autoRepo();
+    return { owner:(c.owner||a.owner||'').trim(), repo:(c.repo||a.repo||'').trim(), branch:(c.branch||'').trim(), token:(c.token||'').trim() };
+  }
+  function baseUrl(){ return location.origin+location.pathname.replace(/index\.html?$/i,''); }
+  function newId(){ const b=new Uint8Array(8); crypto.getRandomValues(b); let s=''; for(let i=0;i<b.length;i++) s+=ALPHA[b[i]&31]; return s; }
+
+  function utf8ToB64(str){
+    const bytes=new TextEncoder().encode(str); let bin=''; const CH=0x8000;
+    for(let i=0;i<bytes.length;i+=CH) bin+=String.fromCharCode.apply(null,bytes.subarray(i,i+CH));
+    return btoa(bin);
+  }
+  function ghUrl(r,id){ return 'https://api.github.com/repos/'+encodeURIComponent(r.owner)+'/'+encodeURIComponent(r.repo)+'/contents/articles/'+id+'.json'; }
+  function refQs(r){ return r.branch?'?ref='+encodeURIComponent(r.branch):''; }
+  function ghHeaders(r,extra){
+    const h={'Accept':'application/vnd.github+json','X-GitHub-Api-Version':'2022-11-28'};
+    if(r.token) h['Authorization']='Bearer '+r.token;
+    return Object.assign(h,extra||{});
+  }
+  async function ghError(res){
+    let msg=''; try{ const j=await res.json(); msg=j&&j.message?(' ('+j.message+')'):''; }catch(e){}
+    if(res.status===401) return new Error('GitHub rejected the token. Check it in ⚙ GitHub settings.'+msg);
+    if(res.status===403) return new Error('GitHub refused the request: token lacks permission, or a rate limit was hit.'+msg);
+    if(res.status===404) return new Error('Repo not found, or the token has no Contents (read and write) access to it. Check owner/repo/token in ⚙ GitHub settings.'+msg);
+    return new Error('GitHub error '+res.status+'.'+msg);
+  }
+  async function ghGetSha(r,id){
+    const res=await fetch(ghUrl(r,id)+refQs(r),{headers:ghHeaders(r),cache:'no-store'});
+    if(res.status===404) return null;
+    if(!res.ok) throw await ghError(res);
+    return (await res.json()).sha||null;
+  }
+  async function ghGetRaw(r,id){   /* raw media type works for files up to 100 MB */
+    const res=await fetch(ghUrl(r,id)+refQs(r),{headers:ghHeaders(r,{'Accept':'application/vnd.github.raw+json'}),cache:'no-store'});
+    if(!res.ok) throw await ghError(res);
+    return JSON.parse(await res.text());
+  }
+  async function publishToGitHub(data){
+    const r=repoInfo();
+    if(!r.token||!r.owner||!r.repo) throw new Error('SETUP');
+    const content=utf8ToB64(JSON.stringify(data));
+    const put=(id,sha)=>{
+      const body={message:(sha?'Update':'Add')+' article '+id,content:content};
+      if(sha) body.sha=sha; if(r.branch) body.branch=r.branch;
+      return fetch(ghUrl(r,id),{method:'PUT',headers:ghHeaders(r,{'Content-Type':'application/json'}),body:JSON.stringify(body)});
+    };
+    if(editingId){
+      for(let i=0;i<2;i++){
+        const sha=await ghGetSha(r,editingId);
+        const res=await put(editingId,sha);
+        if(res.ok) return editingId;
+        if(res.status!==409 && res.status!==422) throw await ghError(res);
+      }
+      throw new Error('Could not save: the file changed on GitHub meanwhile. Reload the editor and try again.');
+    }
+    for(let i=0;i<5;i++){                 /* 422 = file already exists -> pick another id */
+      const id=newId(); const res=await put(id,null);
+      if(res.ok) return id;
+      if(res.status!==422) throw await ghError(res);
+    }
+    throw new Error('Could not find a free link id. Please try again.');
+  }
+  async function fetchPublished(id){
+    const r=repoInfo();
+    try{ const res=await fetch(baseUrl()+'articles/'+id+'.json',{cache:'no-store'}); if(res.ok) return JSON.parse(await res.text()); }catch(e){}
+    if(r.owner&&r.repo){   /* fallback so a fresh link works before Pages finishes deploying */
+      try{ const res=await fetch(ghUrl(r,id)+refQs(r),{headers:ghHeaders(r,{'Accept':'application/vnd.github.raw+json'})}); if(res.ok) return JSON.parse(await res.text()); }catch(e){}
+    }
+    return null;
+  }
+
+  /* ---- legacy self-contained links (#read= / #edit=) still supported ---- */
   async function encodeData(obj){
     const json=JSON.stringify(obj);
     if(window.CompressionStream){
@@ -255,12 +375,9 @@
     return JSON.parse(decodeURIComponent(body));
   }
 
-  async function buildReadMode(){
+  function renderRead(data,opts){
     const page=document.querySelector('.page');
-    let data;
-    try{ data=await decodeData(location.hash.slice(6)); }
-    catch(e){ page.innerHTML='<p style="color:#999;font-family:Arial,sans-serif">This article link is invalid or corrupted.</p>'; return; }
-    ['formatBar','forePop','backPop','divPop','removeFloat','mediaInput','shareModal'].forEach(id=>{ const el=document.getElementById(id); if(el) el.remove(); });
+    ['formatBar','forePop','backPop','divPop','removeFloat','mediaInput','shareModal','ghModal'].forEach(id=>{ const el=document.getElementById(id); if(el) el.remove(); });
     const ownerBar=document.getElementById('ownerBar');
     page.innerHTML='<h1 class="title">'+(data.t||'')+'</h1>'+
                    '<div class="author">'+(data.a||'')+'</div>'+
@@ -268,7 +385,7 @@
     page.querySelectorAll('[contenteditable]').forEach(el=>el.setAttribute('contenteditable','false'));
     page.querySelectorAll('.sel-table,.sel-locked').forEach(el=>el.classList.remove('sel-table','sel-locked'));
     page.querySelectorAll('.locked').forEach(el=>el.classList.remove('unlocked'));
-    document.title = (data.t||'Article').replace(/<[^>]*>/g,'') || 'Article';
+    document.title=(data.t||'Article').replace(/<[^>]*>/g,'')||'Article';
     document.addEventListener('click',e=>{
       const btn=e.target.closest&&e.target.closest('.lk-btn'); if(!btn) return;
       const wrap=btn.closest('.locked'); if(!wrap) return;
@@ -276,27 +393,52 @@
       if(input && input.value===wrap.getAttribute('data-pass')) wrap.classList.add('unlocked');
       else { if(err) err.textContent='Incorrect password. Try again.'; if(input) input.value=''; }
     });
-    // Edit button: reload this article into the editor (owner convenience)
-    if(ownerBar){
+    if(ownerBar && opts.canEdit){   /* Edit button only where the editor can really save */
       ownerBar.classList.add('show');
-      document.getElementById('ownerEdit').addEventListener('click',()=>{
-        location.href=location.origin+location.pathname+'#edit='+location.hash.slice(6);
-        location.reload();
-      });
+      document.getElementById('ownerEdit').addEventListener('click',opts.onEdit);
     }
   }
-  if(location.hash.indexOf('#read=')===0){ buildReadMode(); return; }
+  function readMessage(msg){ document.querySelector('.page').innerHTML='<p style="color:#999;font-family:Arial,sans-serif">'+msg+'</p>'; }
 
-  if(location.hash.indexOf('#edit=')===0){
+  const qs=new URLSearchParams(location.search);
+  const pid=qs.get('p'), eid=qs.get('edit');
+
+  if(pid!==null){
+    (async()=>{
+      if(!ID_RE.test(pid)){ readMessage('This article link is invalid.'); return; }
+      const data=await fetchPublished(pid);
+      if(!data){ readMessage('Article not found. If you just published it, wait a moment and reload.'); return; }
+      renderRead(data,{ canEdit:!!repoInfo().token, onEdit:()=>{ location.href=baseUrl()+'?edit='+pid; } });
+    })();
+    return;
+  }
+  if(location.hash.indexOf('#read=')===0){
+    (async()=>{
+      let data; try{ data=await decodeData(location.hash.slice(6)); }catch(e){ readMessage('This article link is invalid or corrupted.'); return; }
+      renderRead(data,{ canEdit:true, onEdit:()=>{ location.href=location.origin+location.pathname+'#edit='+location.hash.slice(6); location.reload(); } });
+    })();
+    return;
+  }
+  function fillEditor(data){
+    if(data.t){ title.innerHTML=data.t; title.classList.remove('empty'); }
+    if(data.a){ author.innerHTML=data.a; author.classList.remove('empty'); }
+    if(data.s){ story.innerHTML=data.s; story.classList.remove('empty'); }
+    story.querySelectorAll('.sel-table,.sel-locked').forEach(el=>el.classList.remove('sel-table','sel-locked'));
+  }
+  if(eid!==null){
     (async()=>{
       try{
-        const data=await decodeData(location.hash.slice(6));
-        if(data.t){ title.innerHTML=data.t; title.classList.remove('empty'); }
-        if(data.a){ author.innerHTML=data.a; author.classList.remove('empty'); }
-        if(data.s){ story.innerHTML=data.s; story.classList.remove('empty'); }
-        story.querySelectorAll('.sel-table,.sel-locked').forEach(el=>el.classList.remove('sel-table','sel-locked'));
-      }catch(e){}
+        if(!ID_RE.test(eid)) throw new Error('This edit link is invalid.');
+        const r=repoInfo();
+        if(!r.token) throw new Error('Add your GitHub token in ⚙ GitHub settings to edit this article, then reload.');
+        fillEditor(await ghGetRaw(r,eid));
+        editingId=eid;
+        document.getElementById('publishBtn').textContent='UPDATE';
+      }catch(e){ alert(e.message||'Could not load the article.'); }
     })();
+  }
+  if(location.hash.indexOf('#edit=')===0){
+    (async()=>{ try{ fillEditor(await decodeData(location.hash.slice(6))); }catch(e){} })();
   }
   /* ========================================================== */
 
@@ -478,20 +620,60 @@
 
   /* ---- PUBLISH ---- */
   const shareModal=document.getElementById('shareModal'), shareLink=document.getElementById('shareLink');
-  document.getElementById('publishBtn').addEventListener('click',async ()=>{
+  const publishBtn=document.getElementById('publishBtn');
+  publishBtn.addEventListener('click',async ()=>{
     formatBar.classList.remove('show'); hideRemove();
+    if(!repoInfo().token){ openSettings('Add a token to publish.'); return; }
     const clone=story.cloneNode(true);
     clone.querySelectorAll('.sel-table,.sel-locked').forEach(el=>el.classList.remove('sel-table','sel-locked'));
     clone.querySelectorAll('.locked').forEach(el=>el.classList.remove('unlocked'));
     clone.querySelectorAll('.lk-input').forEach(i=>i.setAttribute('value',''));
     clone.querySelectorAll('.lk-err').forEach(e=>e.textContent='');
-    const data={ t:title.classList.contains('empty')?'':title.innerHTML,
+    const data={ v:1,
+                 t:title.classList.contains('empty')?'':title.innerHTML,
                  a:author.classList.contains('empty')?'':author.innerHTML,
                  s:clone.innerHTML };
-    const enc=await encodeData(data);
-    const url=location.origin+location.pathname+'#read='+enc;
-    shareLink.value=url; shareModal.classList.add('show');
+    const label=publishBtn.textContent; publishBtn.disabled=true; publishBtn.textContent='PUBLISHING…';
+    try{
+      const id=await publishToGitHub(data);
+      editingId=id; publishBtn.textContent='UPDATE';
+      shareLink.value=baseUrl()+'?p='+id; shareModal.classList.add('show');
+    }catch(e){
+      publishBtn.textContent=label;
+      if(e.message==='SETUP') openSettings('Add a token (and owner/repo if not auto-detected).');
+      else alert(e.message||'Publishing failed.');
+    }
+    publishBtn.disabled=false;
   });
+
+  /* ---- GitHub settings modal ---- */
+  const ghModal=document.getElementById('ghModal'), ghStatus=document.getElementById('ghStatus');
+  const ghF={token:document.getElementById('ghToken'),owner:document.getElementById('ghOwner'),repo:document.getElementById('ghRepo'),branch:document.getElementById('ghBranch')};
+  function setStatus(msg,cls){ ghStatus.textContent=msg||''; ghStatus.className='gh-status'+(cls?' '+cls:''); }
+  function openSettings(msg){
+    const c=loadCfg(), a=autoRepo();
+    ghF.token.value=c.token||''; ghF.owner.value=c.owner||''; ghF.repo.value=c.repo||''; ghF.branch.value=c.branch||'';
+    ghF.owner.placeholder=a.owner||'your-username'; ghF.repo.placeholder=a.repo||'your-repo';
+    setStatus(msg||''); ghModal.classList.add('show');
+  }
+  document.getElementById('ghOpen').addEventListener('click',()=>openSettings());
+  document.getElementById('ghCancel').addEventListener('click',()=>ghModal.classList.remove('show'));
+  ghModal.addEventListener('click',e=>{ if(e.target===ghModal) ghModal.classList.remove('show'); });
+  document.getElementById('ghClear').addEventListener('click',()=>{ const c=loadCfg(); delete c.token; saveCfg(c); ghF.token.value=''; setStatus('Token removed from this browser.','ok'); });
+  document.getElementById('ghSave').addEventListener('click',async ()=>{
+    const cfg={token:ghF.token.value.trim(),owner:ghF.owner.value.trim(),repo:ghF.repo.value.trim(),branch:ghF.branch.value.trim()};
+    if(!saveCfg(cfg)){ setStatus('Could not save: browser storage is unavailable.','err'); return; }
+    const r=repoInfo();
+    if(!r.owner||!r.repo){ setStatus('Owner and repository could not be auto-detected. Please fill them in.','err'); return; }
+    if(!r.token){ setStatus('Saved. Add a token to publish.','err'); return; }
+    setStatus('Checking repository…');
+    try{
+      const res=await fetch('https://api.github.com/repos/'+encodeURIComponent(r.owner)+'/'+encodeURIComponent(r.repo),{headers:ghHeaders(r)});
+      if(!res.ok) throw await ghError(res);
+      setStatus('Connected to '+r.owner+'/'+r.repo+'. (Write access is confirmed on first publish.)','ok');
+    }catch(e){ setStatus(e.message,'err'); }
+  });
+
   document.getElementById('copyLink').addEventListener('click',()=>{ const btn=document.getElementById('copyLink'); const done=()=>{ btn.textContent='Copied!'; setTimeout(()=>btn.textContent='Copy link',1500); }; if(navigator.clipboard){ navigator.clipboard.writeText(shareLink.value).then(done,()=>{ shareLink.select(); document.execCommand('copy'); done(); }); } else { shareLink.select(); document.execCommand('copy'); done(); } });
   document.getElementById('openLink').addEventListener('click',()=>{ window.open(shareLink.value,'_blank'); });
   document.getElementById('closeShare').addEventListener('click',()=>{ shareModal.classList.remove('show'); });
